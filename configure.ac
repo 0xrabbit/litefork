@@ -724,6 +724,7 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <sys/types.h>
  [ AC_MSG_RESULT(no)]
 )
 
+
 # Check for reduced exports
 if test x$use_reduce_exports = xyes; then
   AX_CHECK_COMPILE_FLAG([-fvisibility=hidden],[RE_CXXFLAGS="-fvisibility=hidden"],
@@ -751,6 +752,21 @@ if test x$use_upnp != xno; then
     [have_miniupnpc=no]
   )
 fi
+
+dnl Check to find the libsodium headers/libraries
+AC_CHECK_LIB(sodium, sodium_init,[],
+[AC_MSG_ERROR([The Sodium crypto library libraries not found.])]
+)
+
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([
+#include <sodium.h>
+], [
+#if SODIUM_LIBRARY_VERSION_MAJOR < 9 || SODIUM_LIBRARY_VERSION_MAJOR == 9 && SODIUM_LIBRARY_VERSION_MINOR < 5
+# error
+#endif
+])],
+[AC_MSG_RESULT([checking for version of libsodium... yes])],
+[AC_MSG_ERROR([Wrong libsodium: version >= 1.0.13 required])])
 
 BITCOIN_QT_INIT
 
@@ -1066,6 +1082,8 @@ AC_SUBST(UNIVALUE_LIBS)
 
 BITCOIN_QT_PATH_PROGS([PROTOC], [protoc],$protoc_bin_path)
 
+LIBEQUIHASH_LIBS="-lcrypto -lsodium"
+
 AC_MSG_CHECKING([whether to build liteforkd])
 AM_CONDITIONAL([BUILD_BITCOIND], [test x$build_bitcoind = xyes])
 AC_MSG_RESULT($build_bitcoind)
@@ -1274,6 +1292,7 @@ AC_SUBST(SSL_LIBS)
 AC_SUBST(EVENT_LIBS)
 AC_SUBST(EVENT_PTHREADS_LIBS)
 AC_SUBST(ZMQ_LIBS)
+AC_SUBST(LIBEQUIHASH_LIBS)
 AC_SUBST(PROTOBUF_LIBS)
 AC_SUBST(QR_LIBS)
 AC_CONFIG_FILES([Makefile src/Makefile doc/man/Makefile share/setup.nsi share/qt/Info.plist test/config.ini])
