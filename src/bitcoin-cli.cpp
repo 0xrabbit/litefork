@@ -7,6 +7,8 @@
 #include <config/bitcoin-config.h>
 #endif
 
+#include <base58.h>
+#include <chainparams.h>
 #include <chainparamsbase.h>
 #include <clientversion.h>
 #include <fs.h>
@@ -50,7 +52,7 @@ std::string HelpMessageCli()
     strUsage += HelpMessageOpt("-stdinrpcpass", strprintf(_("Read RPC password from standard input as a single line.  When combined with -stdin, the first line from standard input is used for the RPC password.")));
     strUsage += HelpMessageOpt("-stdin", _("Read extra arguments from standard input, one per line until EOF/Ctrl-D (recommended for sensitive information such as passphrases).  When combined with -stdinrpcpass, the first line from standard input is used for the RPC password."));
     strUsage += HelpMessageOpt("-rpcwallet=<walletname>", _("Send RPC for non-default wallet on RPC server (argument is wallet filename in liteforkd directory, required if liteforkd/-Qt runs with multiple wallets)"));
-
+    strUsage += HelpMessageOpt("-convertaddress=<litecoin_address>", _("Convert a Litecoin address into Litefork address format."));
     return strUsage;
 }
 
@@ -73,6 +75,21 @@ public:
 
 };
 
+static int ConvertAddressFormat()
+{
+    /*SelectParams(CBaseChainParams::MAIN);
+    const CChainParams& params = BitcoinAddressFormatParams();
+    std::string old_address = gArgs.GetArg("-convertaddress", "");
+    CBitcoinAddress addr(old_address);
+    if (!addr.IsValid(params)) {
+        fprintf(stderr, "Invalid Bitcoin address: %s\n", old_address.c_str());
+        return EXIT_FAILURE;
+    }
+    CBitcoinAddress new_addr(addr.Get(params));
+    fprintf(stdout, "%s\n", new_addr.ToString().c_str());
+    */return EXIT_SUCCESS;
+}
+
 //
 // This function returns either one of EXIT_ codes when it's expected to stop the process or
 // CONTINUE_EXECUTION when it's expected to continue further.
@@ -90,7 +107,8 @@ static int AppInitRPC(int argc, char* argv[])
                   "  litefork-cli [options] <command> [params]  " + strprintf(_("Send command to %s"), _(PACKAGE_NAME)) + "\n" +
                   "  litefork-cli [options] -named <command> [name=value] ... " + strprintf(_("Send command to %s (with named arguments)"), _(PACKAGE_NAME)) + "\n" +
                   "  litefork-cli [options] help                " + _("List commands") + "\n" +
-                  "  litefork-cli [options] help <command>      " + _("Get help for a command") + "\n";
+                  "  litefork-cli [options] help <command>      " + _("Get help for a command") + "\n" +
+                  "  litefork-cli [options] -convertaddress=address " + _("Convert Litecoin address to Litefork address")  + "\n";
 
             strUsage += "\n" + HelpMessageCli();
         }
@@ -123,6 +141,15 @@ static int AppInitRPC(int argc, char* argv[])
     {
         fprintf(stderr, "Error: SSL mode for RPC (-rpcssl) is no longer supported.\n");
         return EXIT_FAILURE;
+    }
+    if (gArgs.IsArgSet("-convertaddress")) {
+        std::string chain_name = ChainNameFromCommandLine();
+        if (chain_name != CBaseChainParams::MAIN) {
+            fprintf(stderr, "Error: Only the address format of mainnet can be converted. You selected: %s\n",
+                    chain_name.c_str());
+            return EXIT_FAILURE;
+        }
+        return ConvertAddressFormat();
     }
     return CONTINUE_EXECUTION;
 }

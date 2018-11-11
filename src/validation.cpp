@@ -39,6 +39,7 @@
 #include <utilstrencodings.h>
 #include <validationinterface.h>
 #include <warnings.h>
+#include <netbase.h>
 
 #include <future>
 #include <sstream>
@@ -457,6 +458,23 @@ static bool IsCurrentForFeeEstimation()
     if (chainActive.Height() < pindexBestHeader->nHeight - 1)
         return false;
     return true;
+}
+
+bool static IsLFKHardForkEnabled(int nHeight, const Consensus::Params& params) {
+    return nHeight >= params.LFKHeight;
+}
+
+bool IsLFKHardForkEnabled(const CBlockIndex* pindexPrev, const Consensus::Params& params) {
+    if (pindexPrev == nullptr) {
+        return false;
+    }
+
+    return IsLFKHardForkEnabled(pindexPrev->nHeight, params);
+}
+
+bool IsLFKHardForkEnabledForCurrentBlock(const Consensus::Params& params) {
+    AssertLockHeld(cs_main);
+    return IsLFKHardForkEnabled(chainActive.Tip(), params);
 }
 
 /* Make mempool consistent after a reorg, by re-adding or recursively erasing
@@ -1119,8 +1137,14 @@ bool ReadBlockFromDisk(CBlock& block, const CDiskBlockPos& pos, const Consensus:
         return error("%s: Deserialize or I/O error - %s at %s", __func__, e.what(), pos.ToString());
     }
 
+    // Check Equihash solution
+    bool postfork = block.nHeight >= (uint32_t)consensusParams.LFKHeight;
+    if (postfork && !CheckEquihashSolution(&block, Params())) {
+        return error("ReadBlockFromDisk: Errors in block header at %s (bad Equihash solution)", pos.ToString());
+    }
+
     // Check the header
-    if (!CheckProofOfWork(block.GetPoWHash(), block.nBits, consensusParams))
+    if (!CheckProofOfWork(block.GetPoWHash(), block.nBits, postfork, consensusParams))
         return error("ReadBlockFromDisk: Errors in block header at %s", pos.ToString());
 
     return true;
@@ -1157,6 +1181,8 @@ CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
 
 bool IsInitialBlockDownload()
 {
+    const CChainParams& chainParams = Params();
+
     // Once this function has returned false, it must remain false.
     static std::atomic<bool> latchToFalse{false};
     // Optimization: pre-test latch before taking the lock.
@@ -1170,9 +1196,12 @@ bool IsInitialBlockDownload()
         return true;
     if (chainActive.Tip() == nullptr)
         return true;
-    if (chainActive.Tip()->nChainWork < nMinimumChainWork)
+    if (chainActive.Tip()->nChainWork < UintToArith256(chainParams.GetConsensus().nMinimumChainWork))
         return true;
-    if (chainActive.Tip()->GetBlockTime() < (GetTime() - nMaxTipAge))
+    if (fSkipHardforkIBD && chainActive.Tip()->nHeight + 1 >= (int)chainParams.GetConsensus().LFKHeight)
+        return false;
+    int64_t target_time = fLFKBootstrapping ? (int64_t)chainParams.GetConsensus().LitecoinPostforkTime : GetTime();
+    if (chainActive.Tip()->GetBlockTime() < (target_time - nMaxTipAge))
         return true;
     LogPrintf("Leaving InitialBlockDownload (latching to false)\n");
     latchToFalse.store(true, std::memory_order_relaxed);
@@ -2981,8 +3010,16 @@ static bool FindUndoPos(CValidationState &state, int nFile, CDiskBlockPos &pos, 
 
 static bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
 {
+    // Check Equihash solution is valid
+    bool postfork = block.nHeight >= (uint32_t)consensusParams.LFKHeight;
+    if (fCheckPOW && postfork && !CheckEquihashSolution(&block, Params())) {
+        LogPrintf("CheckBlockHeader(): Equihash solution invalid at height %d\n", block.nHeight);
+        return state.DoS(100, error("CheckBlockHeader(): Equihash solution invalid"),
+                        REJECT_INVALID, "invalid-solution");
+    }
+
     // Check proof of work matches claimed amount
-    if (fCheckPOW && !CheckProofOfWork(block.GetPoWHash(), block.nBits, consensusParams))
+    if (fCheckPOW && !CheckProofOfWork(block.GetPoWHash(), block.nBits, postfork, consensusParams))
         return state.DoS(50, false, REJECT_INVALID, "high-hash", false, "proof of work failed");
 
     return true;
@@ -3245,7 +3282,7 @@ static bool ContextualCheckBlock(const CBlock& block, CValidationState& state, c
     // large by filling up the coinbase witness, which doesn't change
     // the block hash, so we couldn't mark the block as permanently
     // failed).
-    if (GetBlockWeight(block) > MAX_BLOCK_WEIGHT) {
+    if (GetBlockWeight(block, consensusParams) > MAX_BLOCK_WEIGHT) {
         return state.DoS(100, false, REJECT_INVALID, "bad-blk-weight", false, strprintf("%s : weight limit failed", __func__));
     }
 
